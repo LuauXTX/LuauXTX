@@ -150,6 +150,10 @@ fn install_host_apis(lua: &Lua, script: &Path, script_arguments: &[String]) -> L
         "getenv",
         lua.create_function(|_, name: String| Ok(env::var(name).ok()))?,
     )?;
+    process.set("chdir", lua.create_function(|_, path: String| env::set_current_dir(path).map_err(LuaError::external))?)?;
+    process.set("exit", lua.create_function(|_, code: Option<i32>| { std::process::exit(code.unwrap_or(0)); #[allow(unreachable_code)] Ok(()) })?)?;
+    process.set("spawn", lua.create_function(|_, (command, args, options): (String, Option<Vec<String>>, Option<Table>)| { let mut child_command = std::process::Command::new(command); child_command.args(args.unwrap_or_default()); configure_process_command(&mut child_command, options)?; let child = child_command.spawn().map_err(LuaError::external)?; Ok(child.id() as i64) })?)?;
+    process.set("exec", lua.create_function(|lua, (command, args, options): (String, Option<Vec<String>>, Option<Table>)| { let mut child_command = std::process::Command::new(command); child_command.args(args.unwrap_or_default()); configure_process_command(&mut child_command, options)?; let output = child_command.output().map_err(LuaError::external)?; let result = lua.create_table()?; result.set("code", output.status.code().unwrap_or(-1))?; result.set("stdout", String::from_utf8_lossy(&output.stdout).into_owned())?; result.set("stderr", String::from_utf8_lossy(&output.stderr).into_owned())?; Ok(result) })?)?;
     globals.set("process", process)?;
 
     let loader = ModuleLoader {
@@ -267,6 +271,13 @@ fn create_native_api(lua: &Lua) -> LuaResult<Table> {
         "fs_exists",
         lua.create_function(|_, path: String| Ok(Path::new(&path).exists()))?,
     )?;
+    native.set("fs_mkdir", lua.create_function(|_, (path, recursive, resolve, reject): (String, bool, Function, Function)| { tokio::task::spawn_local(async move { let result = if recursive { tokio::fs::create_dir_all(path).await } else { tokio::fs::create_dir(path).await }; match result { Ok(()) => settle(resolve.call::<()>(())), Err(e) => settle(reject.call::<()>(format!("fs.mkdir failed: {e}"))) } }); Ok(()) })?)?;
+    native.set("fs_rename", lua.create_function(|_, (from, to, resolve, reject): (String, String, Function, Function)| { tokio::task::spawn_local(async move { match tokio::fs::rename(from, to).await { Ok(()) => settle(resolve.call::<()>(())), Err(e) => settle(reject.call::<()>(format!("fs.rename failed: {e}"))) } }); Ok(()) })?)?;
+    native.set("fs_symlink", lua.create_function(|_, (target, path, resolve, reject): (String, String, Function, Function)| { tokio::task::spawn_local(async move { let result = tokio::task::spawn_blocking(move || create_symlink(Path::new(&target), Path::new(&path))).await; match result { Ok(Ok(())) => settle(resolve.call::<()>(())), Ok(Err(e)) => settle(reject.call::<()>(format!("fs.symlink failed: {e}"))), Err(e) => settle(reject.call::<()>(e.to_string())) } }); Ok(()) })?)?;
+    native.set("fs_remove", lua.create_function(|_, (path, recursive, resolve, reject): (String, bool, Function, Function)| { tokio::task::spawn_local(async move { let result = match tokio::fs::metadata(&path).await { Ok(metadata) if metadata.is_dir() && recursive => tokio::fs::remove_dir_all(path).await, Ok(metadata) if metadata.is_dir() => tokio::fs::remove_dir(path).await, Ok(_) => tokio::fs::remove_file(path).await, Err(error) => Err(error) }; match result { Ok(()) => settle(resolve.call::<()>(())), Err(e) => settle(reject.call::<()>(format!("fs.remove failed: {e}"))) } }); Ok(()) })?)?;
+    native.set("fs_copy", lua.create_function(|_, (from, to, recursive, resolve, reject): (String, String, bool, Function, Function)| { tokio::task::spawn_local(async move { let result = tokio::task::spawn_blocking(move || copy_path(Path::new(&from), Path::new(&to), recursive)).await; match result { Ok(Ok(())) => settle(resolve.call::<()>(())), Ok(Err(e)) => settle(reject.call::<()>(format!("fs.copy failed: {e}"))), Err(e) => settle(reject.call::<()>(e.to_string())) } }); Ok(()) })?)?;
+    native.set("fs_read_dir", lua.create_function(|_, (path, resolve, reject): (String, Function, Function)| { tokio::task::spawn_local(async move { match tokio::fs::read_dir(path).await { Ok(mut dir) => { let mut names = Vec::new(); while let Ok(Some(entry)) = dir.next_entry().await { names.push(entry.file_name().to_string_lossy().into_owned()); } settle(resolve.call::<()>(names)); }, Err(e) => settle(reject.call::<()>(format!("fs.readDir failed: {e}"))) } }); Ok(()) })?)?;
+    native.set("fs_stat", lua.create_function(|_, (path, resolve, reject): (String, Function, Function)| { tokio::task::spawn_local(async move { match tokio::fs::metadata(path).await { Ok(m) => settle(resolve.call::<()>((m.is_file(), m.is_dir(), m.len() as i64))), Err(e) => settle(reject.call::<()>(format!("fs.stat failed: {e}"))) } }); Ok(()) })?)?;
     native.set(
         "http_get",
         lua.create_function(|_, (url, resolve, reject): (String, Function, Function)| {
@@ -828,6 +839,30 @@ fn reason_phrase(status: u16) -> &'static str {
         500 => "Internal Server Error",
         _ => "OK",
     }
+}
+
+fn copy_path(source: &Path, destination: &Path, recursive: bool) -> std::io::Result<()> {
+    if source.is_file() { if let Some(parent) = destination.parent() { fs::create_dir_all(parent)?; } fs::copy(source, destination)?; return Ok(()); }
+    if !recursive { return Err(std::io::Error::other("source is a directory; pass recursive=true")); }
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? { let entry = entry?; copy_path(&entry.path(), &destination.join(entry.file_name()), true)?; }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn create_symlink(target: &Path, path: &Path) -> std::io::Result<()> {
+    if target.is_dir() { std::os::windows::fs::symlink_dir(target, path) } else { std::os::windows::fs::symlink_file(target, path) }
+}
+#[cfg(unix)]
+fn create_symlink(target: &Path, path: &Path) -> std::io::Result<()> { std::os::unix::fs::symlink(target, path) }
+
+fn configure_process_command(command: &mut std::process::Command, options: Option<Table>) -> LuaResult<()> {
+    let Some(options) = options else { return Ok(()); };
+    if let Some(cwd) = options.get::<Option<String>>("cwd")? { command.current_dir(cwd); }
+    if let Some(environment) = options.get::<Option<Table>>("env")? {
+        for pair in environment.pairs::<String, String>() { let (key, value) = pair?; command.env(key, value); }
+    }
+    Ok(())
 }
 
 fn schedule_thread(

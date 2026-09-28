@@ -85,6 +85,18 @@ local config = require("./config") -- .luau, .lua, or directory/init.luau
 Tokio's asynchronous filesystem APIs. `fs.readSync` and `fs.writeSync` are
 available when blocking behavior is intentional.
 
+`fs.mkdir(path, recursive?)`, `fs.copy(source, destination, recursive?)`,
+`fs.remove(path, recursive?)`, `fs.rename(source, destination)`,
+`fs.symlink(target, path)`, `fs.readDir(path)`, and `fs.stat(path)` return
+Promises. `stat` resolves to `{ isFile, isDirectory, size }`; `readDir` resolves
+to entry names. Directory copy/removal requires `recursive = true`.
+
+`process.cwd()`, `process.chdir(path)`, and `process.exit(code?)` control the
+current process. `process.spawn(command, args?, options?)` starts a program and
+returns its PID. `process.exec(command, args?, options?)` waits and returns
+`{ code, stdout, stderr }`. Arguments are arrays and are passed directly (no
+shell); options may include `cwd` and `env = { NAME = "value" }`.
+
 ```lua
 task.delay(0.5, function()
     print("later")
