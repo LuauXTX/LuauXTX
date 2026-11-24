@@ -58,6 +58,7 @@ struct WindowData {
     cursor_visible: bool,
     occluded: bool,
     in_redraw: bool,
+    capture: CursorGrabMode,
 }
 pub(super) struct Draw {
     vertices: Vec<Vertex>,
@@ -434,13 +435,21 @@ impl UserData for WindowHandle {
         });
         m.add_method("setMouseCapture", |_, this, capture: bool| {
             let n = this.native()?;
-            let result = if capture {
-                n.set_cursor_grab(CursorGrabMode::Locked)
-                    .or_else(|_| n.set_cursor_grab(CursorGrabMode::Confined))
+            let (mode, name) = if capture {
+                if n.set_cursor_grab(CursorGrabMode::Locked).is_ok() {
+                    (CursorGrabMode::Locked, "locked")
+                } else {
+                    n.set_cursor_grab(CursorGrabMode::Confined)
+                        .map_err(|e| error(format!("mouse capture unavailable: {e}")))?;
+                    (CursorGrabMode::Confined, "confined")
+                }
             } else {
                 n.set_cursor_grab(CursorGrabMode::None)
+                    .map_err(|e| error(format!("mouse capture unavailable: {e}")))?;
+                (CursorGrabMode::None, "none")
             };
-            result.map_err(|e| error(format!("mouse capture unavailable: {e}")))
+            this.window.borrow_mut().capture = mode;
+            Ok(name)
         });
         m.add_method("focus", |_, this, ()| {
             this.native()?.focus_window();
@@ -613,6 +622,7 @@ pub(crate) fn module(lua: &Lua) -> Result<Table> {
                 cursor_visible: true,
                 occluded: false,
                 in_redraw: false,
+                capture: CursorGrabMode::None,
             }));
             windows.push(w.clone());
             Ok(WindowHandle { window: w })

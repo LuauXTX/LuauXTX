@@ -120,7 +120,7 @@ next frame or when the window closes.
 | `window:endFrame()` | Finish/present the active frame; return true if presented, false if minimized, occluded, or recovering. |
 | `window:setCursor(name)` | Set one of the cursor names below. |
 | `window:setCursorVisible(bool)` | Show/hide the cursor while it is over the window. |
-| `window:setMouseCapture(bool)` | Request locked capture, falling back to confinement; release with false. Unsupported requests produce an error. |
+| `window:setMouseCapture(bool)` | Request locked capture, falling back to confinement; release with false. Return `locked`, `confined`, or `none`. Unsupported requests produce an error. Capture is released on focus loss. |
 | `window:focus()` | Request keyboard focus (the OS may refuse it). |
 | `window:setImeEnabled(bool)` | Allow/disallow IME. Enabled by default. |
 | `window:setImePosition(x,y,width,height)` | Set the logical candidate/composition area. |
@@ -182,6 +182,7 @@ Every event has `type`, `sequence` (globally increasing within this run), and
 | `focus` | `focused` boolean. |
 | `scale` | `scaleFactor`, logical `width`, `height`. |
 | `mouseMove` | Logical `x`, `y`. |
+| `rawMouseMotion` | While capturing: unscaled device `deltaX`, `deltaY`. These are raw device units, not display pixels; useful for locked capture, which can suppress absolute movement. |
 | `mouseDown`, `mouseUp` | `button`: `left`, `right`, `middle`, or winit's named/other button representation. |
 | `mouseEnter`, `mouseLeave` | No additional fields. |
 | `scroll` | `x`, `y`, `unit` (`lines` or logical `pixels`). |

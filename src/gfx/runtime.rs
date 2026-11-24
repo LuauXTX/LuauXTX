@@ -8,7 +8,7 @@ use std::{
 };
 use winit::{
     application::ApplicationHandler,
-    event::{ElementState, Ime, MouseScrollDelta, WindowEvent},
+    event::{DeviceEvent, DeviceId, ElementState, Ime, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     window::WindowId,
 };
@@ -251,7 +251,10 @@ impl App<'_> {
                 let mut w=window.borrow_mut();w.scale=scale_factor as f32;let size=w.native.as_ref().ok_or_else(||error("missing native window"))?.inner_size().to_logical::<f32>(scale_factor);w.size=[size.width,size.height];drop(w);
                 self.event(&window,json!({"type":"scale","scaleFactor":scale_factor,"width":size.width,"height":size.height}))?;
             }
-            WindowEvent::Focused(focused)=>self.event(&window,json!({"type":"focus","focused":focused}))?,
+            WindowEvent::Focused(focused)=>{
+                if !focused{let mut w=window.borrow_mut();w.capture=CursorGrabMode::None;if let Some(n)=&w.native{let _=n.set_cursor_grab(CursorGrabMode::None);}}
+                self.event(&window,json!({"type":"focus","focused":focused}))?;
+            }
             WindowEvent::CursorMoved{position,..}=>{let p=position.to_logical::<f64>(window.borrow().scale as f64);self.event(&window,json!({"type":"mouseMove","x":p.x,"y":p.y}))?;}
             WindowEvent::CursorEntered{..}=>self.event(&window,json!({"type":"mouseEnter"}))?,
             WindowEvent::CursorLeft{..}=>self.event(&window,json!({"type":"mouseLeave"}))?,
@@ -276,6 +279,34 @@ impl App<'_> {
     }
 }
 impl ApplicationHandler<()> for App<'_> {
+    fn device_event(&mut self, event_loop: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
+        if let DeviceEvent::MouseMotion { delta: (x, y) } = event {
+            let captured: Vec<_> = self
+                .state
+                .windows
+                .borrow()
+                .iter()
+                .filter(|w| {
+                    let w = w.borrow();
+                    w.open && w.capture != CursorGrabMode::None
+                })
+                .cloned()
+                .collect();
+            for window in captured {
+                if let Err(e) = self.event(
+                    &window,
+                    json!({"type":"rawMouseMotion","deltaX":x,"deltaY":y}),
+                ) {
+                    self.finish(Err(e));
+                    break;
+                }
+            }
+            if let Err(e) = self.sync(event_loop) {
+                self.finish(Err(e));
+            }
+            self.tick(event_loop);
+        }
+    }
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(startup) = self.startup.take() {
             self.state.running.set(true);
