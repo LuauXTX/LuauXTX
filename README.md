@@ -137,8 +137,88 @@ functions or in a promise returned by the module.
 
 This runtime runs trusted local code. Its file APIs are not sandboxed.
 
+## Installed packages (native CLI)
+
+Install a dependency with [XTPKG](https://github.com/LuauXTX/xtpkg), then require
+it by its package name:
+
+```bash
+xtpkg add xtest
+luauxtx src/main.luau
+```
+
+```luau
+local xtest = require("xtest")
+local scoped = require("scope/package") -- after installing scope/package
+```
+
+No import adapter or generated wrapper path is needed. Starting at the importing
+file's directory, the native runtime checks `packages/.xtpkg-imports.json` at
+each directory and walks up to the filesystem root. The nearest map containing
+the requested name wins. A nearer map without that name allows the search to
+continue. A malformed map or a broken matching entry produces an error with the
+map path and package name; it does not silently load a different parent version.
+Resolution follows the importing file, even if the working directory changes.
+
+XTPKG already generates maps with this format:
+
+```json
+{
+  "xtest": {
+    "path": "./xtest",
+    "entry": "src/main.luau",
+    "version": "1.0.0"
+  },
+  "scope/package": {
+    "path": "./scope/package",
+    "entry": "init.lua",
+    "version": "1.0.0"
+  }
+}
+```
+
+`path` is a directory relative to the map's `packages/` directory, and `entry`
+is an exact `.lua` or `.luau` file relative to that package directory. Version,
+revision, and other metadata do not affect runtime resolution. Paths must stay
+inside their package installation; traversal, absolute map paths, device names,
+and symlink entries escaping the package directory are rejected. Import maps
+are limited to 2 MiB. Package names use XTPKG's lowercase `name` or
+`scope/package` syntax; arbitrary package subpaths and Node's `@scope` syntax
+are not supported.
+
+Both flattened XTPKG dependencies and nested installations work. For example,
+`packages/outer/packages/.xtpkg-imports.json` can select a private dependency
+for modules inside `outer`; otherwise they find the project's shared packages.
+An exported function keeps its defining module's resolution context when
+called later, including from a timer or callback.
+
+Built-ins (including `process`) take precedence over package names. Relative
+imports (`./module`, `../module`), absolute paths, `.lua`/`.luau` extension
+lookup, and directory `init.lua`/`init.luau` imports continue to work. Existing
+XTPKG wrappers such as `require("./packages/xtest")` also remain usable. Files
+are cached by their canonical filesystem path, so bare imports, wrappers,
+absolute paths, `..` paths, and symlinks share the entrypoint's export and run it
+once per VM. Windows separator and case variants share that cache too. Failed
+loads can be retried; circular imports report an error.
+
+The loader only reads installed files. It does not invoke XTPKG, fetch missing
+packages, or run installation hooks. Install packages explicitly before running
+your script. Filesystem package loading belongs to the native CLI; the browser
+host continues to expose embedded built-ins only.
+
+## Tests
+
+```bash
+cargo test --locked -p luauxtx
+```
+
+The CLI integration suite covers package precedence, scoped names, nested and
+flattened dependencies, deferred imports, canonical caching, map errors, and
+portable path validation. CI runs the suite on Windows, Linux, and macOS.
+File-symlink assertions on Windows require Developer Mode or symlink privilege;
+the test reports a skip for those assertions if that privilege is unavailable.
+
 ## Next steps
 
 - HTTP server and TCP APIs
-- package resolution and a package manager
 - permissions and isolated script execution
