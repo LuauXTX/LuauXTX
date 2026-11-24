@@ -23,7 +23,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb mesa-vulkan-drivers fonts-dejavu-core
+          sudo apt-get install -y xvfb mesa-vulkan-drivers fonts-dejavu-core libxkbcommon-x11-0
       - name: Test native module loading and runtime APIs
         run: cargo test --locked -p luauxtx
       - name: Exercise GPU pixels and real windows on a software adapter
@@ -33,4 +33,4 @@ jobs:
           LUAUXTX_REQUIRE_GPU: '1'
         run: |
           cargo test --locked -p luauxtx --lib gpu_pixels -- --nocapture
-          xvfb-run -a cargo test --locked -p luauxtx --test graphics -- --ignored
+          xvfb-run -a cargo test --locked -p luauxtx --test graphics -- --ignored --test-threads=1

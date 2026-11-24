@@ -23,6 +23,30 @@ impl Wake for WakeLoop {
     }
 }
 
+fn desktop_dependencies() -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        let present = |name| std::env::var(name).is_ok_and(|value| !value.is_empty());
+        let wayland = present("WAYLAND_DISPLAY") || present("WAYLAND_SOCKET");
+        let x11 = present("DISPLAY") && !wayland;
+        if wayland || x11 {
+            if xkbcommon_dl::xkbcommon_option().is_none()
+                || xkbcommon_dl::xkbcommon_compose_option().is_none()
+            {
+                return Err(error(
+                    "desktop graphics unavailable: libxkbcommon is missing or incompatible (Debian/Ubuntu: install libxkbcommon0)",
+                ));
+            }
+            if x11 && xkbcommon_dl::x11::xkbcommon_x11_option().is_none() {
+                return Err(error(
+                    "desktop graphics unavailable: libxkbcommon-x11 is missing or incompatible (Debian/Ubuntu: install libxkbcommon-x11-0)",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn execute(
     lua: &Lua,
     rt: &tokio::runtime::Runtime,
@@ -44,6 +68,12 @@ pub(crate) fn execute(
         .borrow_mut()
         .take()
         .ok_or_else(|| error("missing graphics run request"))?;
+    // Winit's X11 keyboard initialization otherwise expects these libraries
+    // and can panic. Use the same optional loaders to report a Luau error first.
+    if let Err(e) = desktop_dependencies() {
+        let _ = request.done.send(Err(e));
+        return rt.block_on(future);
+    }
     let event_loop = match EventLoop::<()>::with_user_event().build() {
         Ok(el) => el,
         Err(e) => {

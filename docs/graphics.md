@@ -223,6 +223,10 @@ adapters may work, with lower performance. Requiring the module or loading CPU
 resources does not initialize winit/wgpu. An absent display/GPU produces a
 catchable error from `gfx.run`. The portable/browser host reports that this
 module requires the native desktop CLI. Mobile/web windowing is not supported.
+Linux requires `libxkbcommon` (including compose support), and X11 additionally
+requires `libxkbcommon-x11`. On Debian/Ubuntu these are `libxkbcommon0` and
+`libxkbcommon-x11-0`. Missing keyboard libraries are reported before winit's
+window-system initialization; the runtime never installs them automatically.
 
 Default native backends are Direct3D 12 on Windows, Metal on macOS, and
 Vulkan/OpenGL on Linux. `WGPU_BACKEND` can select another compiled backend
