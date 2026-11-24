@@ -1,5 +1,5 @@
 local native = ...
-local Promise = require("async/promise")
+local Promise = require("@luauxtx/async/promise")
 
 local websocket = {}
 local Socket = {}

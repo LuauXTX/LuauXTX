@@ -35,12 +35,13 @@ mod standard_library {
 pub fn run_with_host(lua: &mlua::Lua, source: &str, native: mlua::Table) -> Result<String, String> {
     let cache = lua.create_table().map_err(|error| error.to_string())?;
     let require = lua.create_function(move |lua, name: String| {
-        let cached: mlua::Value = cache.raw_get(name.as_str())?;
+        let name = name.strip_prefix("@luauxtx/").unwrap_or(&name);
+        let cached: mlua::Value = cache.raw_get(name)?;
         if !matches!(cached, mlua::Value::Nil) { return Ok(cached); }
         let module = standard_library::STANDARD_LIBRARY.iter().find_map(|(module, source)| (*module == name).then_some(*source))
             .ok_or_else(|| mlua::Error::RuntimeError(format!("unknown built-in module {name:?}")))?;
-        let value = lua.load(module).set_name(format!("@xtx/{name}")).call::<mlua::Value>(native.clone())?;
-        cache.raw_set(name.as_str(), value.clone())?;
+        let value = lua.load(module).set_name(format!("@luauxtx/{name}")).call::<mlua::Value>(native.clone())?;
+        cache.raw_set(name, value.clone())?;
         Ok(value)
     }).map_err(|error| error.to_string())?;
     lua.globals().set("require", require).map_err(|error| error.to_string())?;
@@ -49,5 +50,14 @@ pub fn run_with_host(lua: &mlua::Lua, source: &str, native: mlua::Table) -> Resu
         mlua::Value::Nil => Ok(String::new()),
         mlua::Value::String(value) => value.to_str().map(|value| value.to_owned()).map_err(|error| error.to_string()),
         value => Ok(format!("{value:?}")),
+    }
+}
+
+#[cfg(test)]
+mod namespace_tests {
+    #[test]
+    fn portable_host_uses_the_same_native_namespace_and_cache() {
+        assert_eq!(super::run("local t = require('@luauxtx/async/task'); assert(t == require('async/task')); return 'ok'").unwrap(),"ok");
+        assert!(super::run("require('@luauxtx/missing')").unwrap_err().contains("unknown built-in module"));
     }
 }

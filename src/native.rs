@@ -25,7 +25,7 @@ use tokio_tungstenite::{
 };
 use uuid::Uuid;
 
-use crate::resolution::resolve_module;
+use crate::resolution::{resolve_file, resolve_module};
 
 mod standard_library {
     include!(concat!(env!("OUT_DIR"), "/standard_library.rs"));
@@ -155,6 +155,7 @@ fn install_host_apis(lua: &Lua, script: &Path, script_arguments: &[String]) -> L
     process.set("exit", lua.create_function(|_, code: Option<i32>| { std::process::exit(code.unwrap_or(0)); #[allow(unreachable_code)] Ok(()) })?)?;
     process.set("spawn", lua.create_function(|_, (command, args, options): (String, Option<Vec<String>>, Option<Table>)| { let mut child_command = std::process::Command::new(command); child_command.args(args.unwrap_or_default()); configure_process_command(&mut child_command, options)?; let child = child_command.spawn().map_err(LuaError::external)?; Ok(child.id() as i64) })?)?;
     process.set("exec", lua.create_function(|lua, (command, args, options): (String, Option<Vec<String>>, Option<Table>)| { let mut child_command = std::process::Command::new(command); child_command.args(args.unwrap_or_default()); configure_process_command(&mut child_command, options)?; let output = child_command.output().map_err(LuaError::external)?; let result = lua.create_table()?; result.set("code", output.status.code().unwrap_or(-1))?; result.set("stdout", String::from_utf8_lossy(&output.stdout).into_owned())?; result.set("stderr", String::from_utf8_lossy(&output.stderr).into_owned())?; Ok(result) })?)?;
+    native.set("process", process.clone())?;
     globals.set("process", process)?;
 
     let loader = ModuleLoader {
@@ -897,10 +898,18 @@ fn settle(result: LuaResult<()>) {
 
 fn create_require(lua: &Lua, base_directory: PathBuf, loader: ModuleLoader) -> LuaResult<Function> {
     lua.create_function(move |lua, specifier: String| {
-        if specifier == "process" {
-            return lua.globals().get("process");
+        if let Some(name) = specifier.strip_prefix("@luauxtx/") {
+            if standard_library_source(name).is_none() {
+                return Err(LuaError::RuntimeError(format!("unknown native module {specifier:?}; no matching module in lib/")));
+            }
+            return execute_standard_module(lua, name, &base_directory, loader.clone());
         }
         if standard_library_source(&specifier).is_some() {
+            // Compatibility aliases yield to a file relative to the importer.
+            // Explicit @luauxtx/ imports always bypass local files and packages.
+            if let Some(path) = resolve_file(&base_directory.join(&specifier)).map_err(LuaError::RuntimeError)? {
+                return execute_module(lua, &path, loader.clone());
+            }
             return execute_standard_module(lua, &specifier, &base_directory, loader.clone());
         }
 
@@ -948,7 +957,7 @@ fn execute_standard_module(
     }
 
     loader.standard_loading.raw_set(name, true)?;
-    let chunk_name = format!("@xtx/{name}");
+    let chunk_name = format!("@luauxtx/{name}");
     let result = lua
         .load(source)
         .set_name(&chunk_name)

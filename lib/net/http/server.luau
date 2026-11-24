@@ -1,6 +1,6 @@
 local native = ...
-local Request = require("net/http/request")
-local Response = require("net/http/response")
+local Request = require("@luauxtx/net/http/request")
+local Response = require("@luauxtx/net/http/response")
 
 local http = {}
 

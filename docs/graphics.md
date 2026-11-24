@@ -5,6 +5,9 @@ widgets, layout, themes, or GUI framework. It uses winit, wgpu, and glyphon's
 cosmic-text/Swash types for Unicode shaping, measurement, and rasterization.
 Text runs are cached as GPU textures so they support the same affine transforms
 and exact polygon clips as other drawing operations.
+The module source is `lib/gfx.luau`; `@luauxtx/` selects embedded native modules
+and is not a literal source directory. The legacy `require("gfx")` alias is a
+fallback and yields to an importing file's relative `gfx.luau`/`gfx.lua` module.
 
 ## Execution model
 

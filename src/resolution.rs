@@ -23,8 +23,18 @@ pub(crate) fn resolve_module(base: &Path, specifier: &str) -> ResolveResult {
     } else {
         base.join(requested)
     };
+    if let Some(path) = resolve_file(&candidate)? {
+        return Ok(path);
+    }
+    Err(format!(
+        "cannot resolve module {specifier:?} from {}",
+        base.display()
+    ))
+}
+
+pub(crate) fn resolve_file(candidate: &Path) -> Result<Option<PathBuf>, String> {
     let options = [
-        candidate.clone(),
+        candidate.to_path_buf(),
         candidate.with_extension("luau"),
         candidate.with_extension("lua"),
         candidate.join("init.luau"),
@@ -32,13 +42,10 @@ pub(crate) fn resolve_module(base: &Path, specifier: &str) -> ResolveResult {
     ];
     for option in options {
         if option.is_file() {
-            return canonical_file(&option);
+            return canonical_file(&option).map(Some);
         }
     }
-    Err(format!(
-        "cannot resolve module {specifier:?} from {}",
-        base.display()
-    ))
+    Ok(None)
 }
 
 fn canonical_file(path: &Path) -> ResolveResult {

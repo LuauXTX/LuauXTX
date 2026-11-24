@@ -18,10 +18,12 @@ primitives to those modules only; user scripts receive the public `Promise`,
 
 To add a built-in module, create a `.luau` file in `lib/` and rebuild. Module
 names follow their path, so `lib/system/path.luau` is loaded with
-`require("system/path")` and `lib/crypto/base64.luau` is loaded with
-`require("crypto/base64")`.
+`require("@luauxtx/system/path")` and `lib/crypto/base64.luau` is loaded with
+`require("@luauxtx/crypto/base64")`. `@luauxtx/` is a virtual native namespace;
+it is not a directory under `lib/`. For example, `@luauxtx/gfx` maps to
+`lib/gfx.luau`.
 Directory modules can use `init.luau`, such as `lib/json/init.luau` for
-`require("json")`. The build rejects duplicate module names.
+`require("@luauxtx/json")`. The build rejects duplicate module names.
 
 ```luau
 -- lib/system/path.luau
@@ -35,7 +37,7 @@ return path
 ```
 
 ```luau
-local path = require("system/path")
+local path = require("@luauxtx/system/path")
 print(path.join("src", "main.luau"))
 ```
 
@@ -113,12 +115,12 @@ print(response.status, response.body)
 loop. `Promise` supports `resolve`, `reject`, `all`, `andThen`, `catch`, and
 `await`. HTTP currently provides an asynchronous `http.fetch(url)` GET client.
 
-For a small HTTP server, use `require("net/http/server")`. `createServer` takes
+For a small HTTP server, use `require("@luauxtx/net/http/server")`. `createServer` takes
 a function (or a `net/http/router` router), and `listen(port)` begins accepting
 connections on `127.0.0.1`. Request bodies are strings; `res:send`,
 `res:json`, `res:status`, and `res:header` build the response.
 
-`require("net/websocket")` supports both client and standalone server sockets.
+`require("@luauxtx/net/websocket")` supports both client and standalone server sockets.
 `websocket.connect("ws://...")` (and `wss://`) returns a Promise for a socket;
 use `socket:send`, `socket:sendBinary`, `socket:receive`, and `socket:close`.
 `websocket.listen(port, handler)` accepts WebSocket connections on `127.0.0.1`.
@@ -129,10 +131,21 @@ a datagram socket with `send(data, host, port)` and `receive`. `net/dns.lookup`
 asynchronously resolves a hostname to an array of IP-address strings.
 
 `require` caches module return values. Modules must return the value they
-export. Built-in modules are namespaced: `require("system/fs")`,
-`require("system/path")`, `require("net/http")`, `require("net/url")`,
-`require("async/promise")`, and `require("async/task")`. `process`, `fs`,
+export. Native modules use `require("@luauxtx/system/fs")`,
+`require("@luauxtx/system/path")`, `require("@luauxtx/net/http")`,
+`require("@luauxtx/net/url")`, `require("@luauxtx/async/promise")`, and
+`require("@luauxtx/async/task")`. `require("@luauxtx/process")` returns the
+native process API. `process`, `fs`,
 `http`, `task`, and `Promise` remain available as globals.
+
+Unprefixed native names are compatibility fallbacks. For example,
+`require("system/fs")` first checks for `system/fs.luau`, `system/fs.lua`, or
+`system/fs/init.luau`/`init.lua` relative to the importing file; a matching local
+module wins. If no local file matches, it loads the native module. Explicit
+`@luauxtx/...` imports bypass local files and packages and share the same native
+cache as an unshadowed compatibility import. Unknown native names produce an
+error without falling back to the filesystem. Native modules use the explicit
+prefix for their own dependencies too.
 
 The entry script may use `:await()`. Modules loaded by `require` execute
 synchronously while loading, so asynchronous work belongs in exported
@@ -205,7 +218,9 @@ for modules inside `outer`; otherwise they find the project's shared packages.
 An exported function keeps its defining module's resolution context when
 called later, including from a timer or callback.
 
-Built-ins (including `process`) take precedence over package names. Relative
+Use `@luauxtx/...` to select native modules unambiguously. Legacy native aliases
+prefer a matching relative file, then fall back to the native module. Other bare
+names continue to use installed package maps. Relative
 imports (`./module`, `../module`), absolute paths, `.lua`/`.luau` extension
 lookup, and directory `init.lua`/`init.luau` imports continue to work. Existing
 XTPKG wrappers such as `require("./packages/xtest")` also remain usable. Files

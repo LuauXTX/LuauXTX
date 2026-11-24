@@ -1,5 +1,5 @@
 local native = ...
-local Promise = require("async/promise")
+local Promise = require("@luauxtx/async/promise")
 local udp, Socket = {}, {}
 Socket.__index = Socket
 function Socket:send(data, host, port) return Promise.new(function(resolve, reject) native.udp_send(self._socket, data, host, port, resolve, reject) end) end

@@ -105,6 +105,51 @@ fn loads_actual_xtpkg_map_without_adapters_wrappers_or_package_manager() {
 }
 
 #[test]
+fn native_prefix_bypasses_relative_overrides_and_aliases_share_cache() {
+    let p = Project::new();
+    fs::create_dir_all(p.project.join("system")).unwrap();
+    fs::create_dir_all(p.project.join("async")).unwrap();
+    fs::write(p.project.join("system/fs.luau"),"shadowLoads = (shadowLoads or 0) + 1; return { shadow = true, native = require('@luauxtx/system/fs') }").unwrap();
+    fs::write(
+        p.project.join("async/promise.luau"),
+        "error('native dependencies must not use legacy aliases')",
+    )
+    .unwrap();
+    fs::write(
+        p.project.join("async/task.luau"),
+        "error('native dependencies must not use legacy aliases')",
+    )
+    .unwrap();
+    fs::write(p.project.join("process.luau"), "return 'local process'").unwrap();
+    p.success("app.luau", "local native = require('@luauxtx/system/fs'); local shadow = require('system/fs'); assert(native == fs and shadow.shadow and shadow.native == native); assert(shadow == require('./system/fs') and shadowLoads == 1); assert(require('process') == 'local process'); assert(require('@luauxtx/process') == process); assert(require('@luauxtx/async/promise') == Promise); fs.write('native.txt', 'ok'):await(); assert(fs.read('native.txt'):await() == 'ok')");
+}
+
+#[test]
+fn legacy_builtin_directory_overrides_are_relative_to_the_importer() {
+    let p = Project::new();
+    fs::create_dir_all(p.project.join("src/system/path")).unwrap();
+    fs::write(
+        p.project.join("src/system/path/init.lua"),
+        "return { localPath = true }",
+    )
+    .unwrap();
+    p.success("src/app.luau", "assert(require('system/path').localPath); assert(type(require('@luauxtx/system/path').join) == 'function'); assert(require('@luauxtx/crypto/hash') == require('crypto/hash'))");
+}
+
+#[test]
+fn unknown_native_prefix_never_falls_back_to_files_or_packages() {
+    let p = Project::new();
+    fs::create_dir_all(p.project.join("src/@luauxtx")).unwrap();
+    fs::write(
+        p.project.join("src/@luauxtx/missing.luau"),
+        "error('must not load a file for the native namespace')",
+    )
+    .unwrap();
+    p.failure("require('@luauxtx/missing')", "unknown native module");
+    p.failure("require('@luauxtx/system/../fs')", "unknown native module");
+}
+
+#[test]
 fn loads_scoped_packages_and_lua_entrypoints() {
     let p = Project::new();
     p.package(

@@ -1,1 +1,1 @@
-return require("net/http/client")
+return require("@luauxtx/net/http/client")

@@ -22,7 +22,7 @@ end
 
 function response:json(value)
     self:header("Content-Type", "application/json")
-    self:send(require("serde/json").encode(value))
+    self:send(require("@luauxtx/serde/json").encode(value))
     return self
 end
 

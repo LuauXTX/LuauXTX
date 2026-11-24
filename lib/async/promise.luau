@@ -1,4 +1,4 @@
-local task = require("async/task")
+local task = require("@luauxtx/async/task")
 
 local Promise = {}
 Promise.__index = Promise

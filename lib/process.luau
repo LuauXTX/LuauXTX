@@ -1,0 +1,3 @@
+local native = ...
+assert(native.process, "@luauxtx/process requires native process bindings")
+return native.process
