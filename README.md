@@ -90,6 +90,9 @@ available when blocking behavior is intentional.
 `fs.symlink(target, path)`, `fs.readDir(path)`, and `fs.stat(path)` return
 Promises. `stat` resolves to `{ isFile, isDirectory, size }`; `readDir` resolves
 to entry names. Directory copy/removal requires `recursive = true`.
+On Windows, `fs.rename` retries temporary sharing/access errors for up to 1.6
+seconds, allowing package directory replacement to survive brief file locks.
+It does not change permissions or delete the destination to force a rename.
 
 `process.cwd()`, `process.chdir(path)`, and `process.exit(code?)` control the
 current process. `process.spawn(command, args?, options?)` starts a program and

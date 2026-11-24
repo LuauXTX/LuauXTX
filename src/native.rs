@@ -276,7 +276,7 @@ fn create_native_api(lua: &Lua) -> LuaResult<Table> {
         lua.create_function(|_, path: String| Ok(Path::new(&path).exists()))?,
     )?;
     native.set("fs_mkdir", lua.create_function(|_, (path, recursive, resolve, reject): (String, bool, Function, Function)| { tokio::task::spawn_local(async move { let result = if recursive { tokio::fs::create_dir_all(path).await } else { tokio::fs::create_dir(path).await }; match result { Ok(()) => settle(resolve.call::<()>(())), Err(e) => settle(reject.call::<()>(format!("fs.mkdir failed: {e}"))) } }); Ok(()) })?)?;
-    native.set("fs_rename", lua.create_function(|_, (from, to, resolve, reject): (String, String, Function, Function)| { tokio::task::spawn_local(async move { match tokio::fs::rename(from, to).await { Ok(()) => settle(resolve.call::<()>(())), Err(e) => settle(reject.call::<()>(format!("fs.rename failed: {e}"))) } }); Ok(()) })?)?;
+    native.set("fs_rename", lua.create_function(|_, (from, to, resolve, reject): (String, String, Function, Function)| { tokio::task::spawn_local(async move { match rename_path(Path::new(&from), Path::new(&to)).await { Ok(()) => settle(resolve.call::<()>(())), Err(e) => settle(reject.call::<()>(format!("fs.rename failed: {e}"))) } }); Ok(()) })?)?;
     native.set("fs_symlink", lua.create_function(|_, (target, path, resolve, reject): (String, String, Function, Function)| { tokio::task::spawn_local(async move { let result = tokio::task::spawn_blocking(move || create_symlink(Path::new(&target), Path::new(&path))).await; match result { Ok(Ok(())) => settle(resolve.call::<()>(())), Ok(Err(e)) => settle(reject.call::<()>(format!("fs.symlink failed: {e}"))), Err(e) => settle(reject.call::<()>(e.to_string())) } }); Ok(()) })?)?;
     native.set("fs_remove", lua.create_function(|_, (path, recursive, resolve, reject): (String, bool, Function, Function)| { tokio::task::spawn_local(async move { let result = match tokio::fs::metadata(&path).await { Ok(metadata) if metadata.is_dir() && recursive => tokio::fs::remove_dir_all(path).await, Ok(metadata) if metadata.is_dir() => tokio::fs::remove_dir(path).await, Ok(_) => tokio::fs::remove_file(path).await, Err(error) => Err(error) }; match result { Ok(()) => settle(resolve.call::<()>(())), Err(e) => settle(reject.call::<()>(format!("fs.remove failed: {e}"))) } }); Ok(()) })?)?;
     native.set("fs_copy", lua.create_function(|_, (from, to, recursive, resolve, reject): (String, String, bool, Function, Function)| { tokio::task::spawn_local(async move { let result = tokio::task::spawn_blocking(move || copy_path(Path::new(&from), Path::new(&to), recursive)).await; match result { Ok(Ok(())) => settle(resolve.call::<()>(())), Ok(Err(e)) => settle(reject.call::<()>(format!("fs.copy failed: {e}"))), Err(e) => settle(reject.call::<()>(e.to_string())) } }); Ok(()) })?)?;
@@ -1030,6 +1030,22 @@ fn absolute_path(path: PathBuf) -> AppResult<PathBuf> {
     }
 }
 
+async fn rename_path(from: &Path, to: &Path) -> std::io::Result<()> {
+    // Windows can briefly deny renaming a freshly written package tree while
+    // another process has a handle without FILE_SHARE_DELETE. Never change
+    // permissions or remove the destination; retry the same rename for <=1.6s.
+    #[cfg(windows)]
+    for delay in [25, 50, 100, 200, 400, 800] {
+        match tokio::fs::rename(from, to).await {
+            Err(error) if matches!(error.raw_os_error(), Some(5 | 32 | 33)) => {
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+            }
+            result => return result,
+        }
+    }
+    tokio::fs::rename(from, to).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1037,6 +1053,35 @@ mod tests {
         io::{AsyncReadExt, AsyncWriteExt},
         net::{TcpListener, TcpStream},
     };
+
+    #[cfg(windows)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn directory_rename_retries_a_transient_windows_sharing_lock() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = env::temp_dir().join(format!("luauxtx-rename-{}", Uuid::new_v4()));
+        let from = root.join("stage");
+        let to = root.join("packages");
+        fs::create_dir_all(&from).unwrap();
+        fs::write(from.join("module.luau"), "return 42").unwrap();
+        let lock = fs::OpenOptions::new().read(true)
+            .custom_flags(0x02000000) // FILE_FLAG_BACKUP_SEMANTICS: open a directory.
+            .share_mode(0x1 | 0x2) // Allow reads/writes, but hold back FILE_SHARE_DELETE.
+            .open(&from).unwrap();
+        let blocked = fs::rename(&from, &to).unwrap_err();
+        assert!(matches!(blocked.raw_os_error(), Some(5 | 32 | 33)));
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            drop(lock);
+        });
+        let result = rename_path(&from, &to).await;
+        release.join().unwrap();
+        result.unwrap();
+        assert_eq!(fs::read_to_string(to.join("module.luau")).unwrap(), "return 42");
+        assert!(!from.exists());
+        // Ordinary resolution/filesystem errors are still reported normally.
+        assert_eq!(rename_path(&from, &to).await.unwrap_err().kind(), std::io::ErrorKind::NotFound);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn resolves_luau_and_index_modules() {
