@@ -11,6 +11,9 @@ pub mod native;
 mod resolution;
 
 #[cfg(not(target_arch = "wasm32"))]
+mod gfx;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub use native::cli_main;
 
 /// Execute a standalone Luau chunk using the embedded Luau VM.

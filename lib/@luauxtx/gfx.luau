@@ -1,0 +1,3 @@
+local native = ...
+assert(native.gfx, "@luauxtx/gfx requires the native desktop CLI")
+return native.gfx

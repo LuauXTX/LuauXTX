@@ -76,15 +76,14 @@ struct UdpHandle {
 
 impl UserData for UdpHandle {}
 
-#[tokio::main(flavor = "current_thread")]
-pub async fn cli_main() {
-    if let Err(error) = run().await {
+pub fn cli_main() {
+    if let Err(error) = run() {
         eprintln!("luauxtx: {error}");
         std::process::exit(1);
     }
 }
 
-async fn run() -> AppResult<()> {
+fn run() -> AppResult<()> {
     let mut arguments = env::args_os().skip(1);
     let Some(script) = arguments.next() else {
         println!("{USAGE}");
@@ -101,16 +100,15 @@ async fn run() -> AppResult<()> {
         .map(|argument| argument.to_string_lossy().into_owned())
         .collect();
 
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build()?;
     let local = LocalSet::new();
     let lua = Lua::new();
-    let result = local
-        .run_until(async {
-            install_host_apis(&lua, &script, &script_arguments)?;
-            execute_entry(&lua, &script, &script_arguments).await
-        })
-        .await;
-    local.await;
-    result.map_err(Into::into)
+    install_host_apis(&lua, &script, &script_arguments)?;
+    crate::gfx::execute(&lua, &runtime, async {
+        let result = local.run_until(execute_entry(&lua, &script, &script_arguments)).await;
+        local.await;
+        result
+    }).map_err(Into::into)
 }
 
 async fn execute_entry(lua: &Lua, path: &Path, arguments: &[String]) -> LuaResult<()> {
@@ -186,6 +184,7 @@ fn install_host_apis(lua: &Lua, script: &Path, script_arguments: &[String]) -> L
 
 fn create_native_api(lua: &Lua) -> LuaResult<Table> {
     let native = lua.create_table()?;
+    native.set("gfx", crate::gfx::module(lua)?)?;
     native.set(
         "sleep",
         lua.create_async_function(|_, seconds: Option<f64>| async move {
