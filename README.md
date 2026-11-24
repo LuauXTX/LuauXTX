@@ -140,6 +140,16 @@ functions or in a promise returned by the module.
 
 This runtime runs trusted local code. Its file APIs are not sandboxed.
 
+## Native 2D graphics
+
+Use `require("@luauxtx/gfx")` for native windows, input/IME events, GPU drawing,
+images, Unicode text, clipping, and affine transforms. This is a primitives
+backend for third-party Luau GUI libraries, with no widgets or layout engine.
+See the [complete graphics API](docs/graphics.md) and run
+`luauxtx examples/graphics.luau` or `luauxtx examples/graphics-events.luau`.
+Graphics uses an event-driven `gfx.run(...)` loop; ordinary CLI scripts keep
+working without a display or GPU.
+
 ## Installed packages (native CLI)
 
 Install a dependency with [XTPKG](https://github.com/LuauXTX/xtpkg), then require

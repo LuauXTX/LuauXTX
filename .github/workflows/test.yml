@@ -19,5 +19,18 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux software-rendering test dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb mesa-vulkan-drivers fonts-dejavu-core
       - name: Test native module loading and runtime APIs
         run: cargo test --locked -p luauxtx
+      - name: Exercise GPU pixels and real windows on a software adapter
+        if: runner.os == 'Linux'
+        env:
+          WGPU_BACKEND: vulkan
+          LUAUXTX_REQUIRE_GPU: '1'
+        run: |
+          cargo test --locked -p luauxtx --lib gpu_pixels -- --nocapture
+          xvfb-run -a cargo test --locked -p luauxtx --test graphics -- --ignored
