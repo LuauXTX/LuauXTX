@@ -25,6 +25,8 @@ use tokio_tungstenite::{
 };
 use uuid::Uuid;
 
+use crate::resolution::resolve_module;
+
 mod standard_library {
     include!(concat!(env!("OUT_DIR"), "/standard_library.rs"));
 }
@@ -37,6 +39,7 @@ const USAGE: &str = "Usage: luauxtx <script.luau> [-- <script arguments...>]\n\n
 struct ModuleLoader {
     native: Table,
     file_cache: Table,
+    file_loaded: Table,
     file_loading: Table,
     standard_cache: Table,
     standard_loading: Table,
@@ -159,6 +162,7 @@ fn install_host_apis(lua: &Lua, script: &Path, script_arguments: &[String]) -> L
     let loader = ModuleLoader {
         native,
         file_cache: lua.create_table()?,
+        file_loaded: lua.create_table()?,
         file_loading: lua.create_table()?,
         standard_cache: lua.create_table()?,
         standard_loading: lua.create_table()?,
@@ -945,18 +949,12 @@ fn execute_standard_module(
     }
 
     loader.standard_loading.raw_set(name, true)?;
-    let globals = lua.globals();
-    let previous_require: Value = globals.get("require")?;
-    globals.set(
-        "require",
-        create_require(lua, base_directory.to_path_buf(), loader.clone())?,
-    )?;
     let chunk_name = format!("@xtx/{name}");
     let result = lua
         .load(source)
         .set_name(&chunk_name)
+        .set_environment(module_environment(lua, base_directory, loader.clone())?)
         .call::<Value>(loader.native.clone());
-    globals.set("require", previous_require)?;
     loader.standard_loading.raw_set(name, Value::Nil)?;
 
     let value = result?;
@@ -971,10 +969,10 @@ fn standard_library_source(name: &str) -> Option<&'static str> {
 }
 
 fn execute_module(lua: &Lua, path: &Path, loader: ModuleLoader) -> LuaResult<Value> {
-    let path = absolute_path(path.to_path_buf()).map_err(LuaError::external)?;
+    let path = fs::canonicalize(path).map_err(LuaError::external)?;
     let cache_key = path.to_string_lossy();
     let cached: Value = loader.file_cache.raw_get(cache_key.as_ref())?;
-    if !matches!(cached, Value::Nil) {
+    if loader.file_loaded.raw_get::<bool>(cache_key.as_ref()).unwrap_or(false) {
         return Ok(cached);
     }
     if loader
@@ -993,19 +991,13 @@ fn execute_module(lua: &Lua, path: &Path, loader: ModuleLoader) -> LuaResult<Val
     })?;
     loader.file_loading.raw_set(cache_key.as_ref(), true)?;
 
-    let globals = lua.globals();
-    let previous_require: Value = globals.get("require")?;
-    let directory = path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .to_path_buf();
-    globals.set("require", create_require(lua, directory, loader.clone())?)?;
+    let directory = path.parent().unwrap_or_else(|| Path::new("."));
 
     let result = lua
         .load(&source)
         .set_name(path.to_string_lossy().as_ref())
+        .set_environment(module_environment(lua, directory, loader.clone())?)
         .eval::<Value>();
-    globals.set("require", previous_require)?;
     loader
         .file_loading
         .raw_set(cache_key.as_ref(), Value::Nil)?;
@@ -1014,39 +1006,20 @@ fn execute_module(lua: &Lua, path: &Path, loader: ModuleLoader) -> LuaResult<Val
     loader
         .file_cache
         .raw_set(cache_key.as_ref(), value.clone())?;
+    loader.file_loaded.raw_set(cache_key.as_ref(), true)?;
     Ok(value)
 }
 
-fn resolve_module(base_directory: &Path, specifier: &str) -> AppResult<PathBuf> {
-    let requested = Path::new(specifier);
-    let candidate = if requested.is_absolute() {
-        requested.to_path_buf()
-    } else if specifier.starts_with("./") || specifier.starts_with("../") {
-        base_directory.join(requested)
-    } else {
-        return Err(format!(
-            "unsupported module {specifier:?}; use a relative path or a built-in module"
-        )
-        .into());
-    };
-
-    let options = [
-        candidate.clone(),
-        candidate.with_extension("luau"),
-        candidate.with_extension("lua"),
-        candidate.join("init.luau"),
-        candidate.join("init.lua"),
-    ];
-    options
-        .into_iter()
-        .find(|path| path.is_file())
-        .ok_or_else(|| {
-            format!(
-                "cannot resolve module {specifier:?} from {}",
-                base_directory.display()
-            )
-            .into()
-        })
+fn module_environment(lua: &Lua, directory: &Path, loader: ModuleLoader) -> LuaResult<Table> {
+    let environment = lua.create_table()?;
+    environment.raw_set("require", create_require(lua, directory.to_path_buf(), loader)?)?;
+    let metatable = lua.create_table()?;
+    // Keep existing shared globals while binding require to the defining module,
+    // including functions invoked after the module has finished loading.
+    metatable.set("__index", lua.globals())?;
+    metatable.set("__newindex", lua.globals())?;
+    environment.set_metatable(Some(metatable))?;
+    Ok(environment)
 }
 
 fn absolute_path(path: PathBuf) -> AppResult<PathBuf> {
@@ -1074,11 +1047,11 @@ mod tests {
 
         assert_eq!(
             resolve_module(&root, "./value").unwrap(),
-            root.join("value.luau")
+            fs::canonicalize(root.join("value.luau")).unwrap()
         );
         assert_eq!(
             resolve_module(&root, "./nested").unwrap(),
-            root.join("nested/init.luau")
+            fs::canonicalize(root.join("nested/init.luau")).unwrap()
         );
         fs::remove_dir_all(root).unwrap();
     }

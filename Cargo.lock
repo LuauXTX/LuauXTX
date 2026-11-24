@@ -614,6 +614,7 @@ dependencies = [
  "futures-util",
  "mlua",
  "reqwest",
+ "serde_json",
  "sha2",
  "tokio",
  "tokio-tungstenite",
