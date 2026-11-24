@@ -56,6 +56,8 @@ struct WindowData {
     next_frame: Instant,
     cursor: CursorIcon,
     cursor_visible: bool,
+    occluded: bool,
+    in_redraw: bool,
 }
 pub(super) struct Draw {
     vertices: Vec<Vertex>,
@@ -361,12 +363,17 @@ impl UserData for WindowHandle {
             if !w.open {
                 return Err(error("window is closed"));
             }
-            w.size = [width, height];
             w.options.width = width;
             w.options.height = height;
-            if let Some(n) = &w.native {
-                let _ =
-                    n.request_inner_size(winit::dpi::LogicalSize::new(width as f64, height as f64));
+            if let Some(n) = w.native.clone() {
+                if let Some(size) =
+                    n.request_inner_size(winit::dpi::LogicalSize::new(width as f64, height as f64))
+                {
+                    let logical = size.to_logical::<f32>(n.scale_factor());
+                    w.size = [logical.width, logical.height];
+                }
+            } else {
+                w.size = [width, height];
             }
             Ok(())
         });
@@ -378,11 +385,19 @@ impl UserData for WindowHandle {
             Ok(())
         });
         m.add_method("onFrame", |_, this, callback: Option<Function>| {
-            this.window.borrow_mut().on_frame = callback;
+            let mut w = this.window.borrow_mut();
+            if !w.open {
+                return Err(error("window is closed"));
+            }
+            w.on_frame = callback;
             Ok(())
         });
         m.add_method("onEvent", |_, this, callback: Option<Function>| {
-            this.window.borrow_mut().on_event = callback;
+            let mut w = this.window.borrow_mut();
+            if !w.open {
+                return Err(error("window is closed"));
+            }
+            w.on_event = callback;
             Ok(())
         });
         m.add_method("pollEvents", |lua, this, ()| {
@@ -397,6 +412,9 @@ impl UserData for WindowHandle {
         m.add_method("setCursor", |_, this, name: String| {
             let icon = cursor(&name)?;
             let mut w = this.window.borrow_mut();
+            if !w.open {
+                return Err(error("window is closed"));
+            }
             w.cursor = icon;
             if let Some(n) = &w.native {
                 n.set_cursor(icon);
@@ -405,6 +423,9 @@ impl UserData for WindowHandle {
         });
         m.add_method("setCursorVisible", |_, this, visible: bool| {
             let mut w = this.window.borrow_mut();
+            if !w.open {
+                return Err(error("window is closed"));
+            }
             w.cursor_visible = visible;
             if let Some(n) = &w.native {
                 n.set_cursor_visible(visible);
@@ -447,6 +468,11 @@ impl UserData for WindowHandle {
             let mut w = this.window.borrow_mut();
             if !w.open || w.native.is_none() {
                 return Err(error("window is closed or not ready"));
+            }
+            if !w.in_redraw {
+                return Err(error(
+                    "beginFrame is only allowed inside this window's onFrame callback",
+                ));
             }
             if w.frame.is_some() {
                 return Err(error("a frame is already active"));
@@ -585,6 +611,8 @@ pub(crate) fn module(lua: &Lua) -> Result<Table> {
                 next_frame: Instant::now(),
                 cursor: CursorIcon::Default,
                 cursor_visible: true,
+                occluded: false,
+                in_redraw: false,
             }));
             windows.push(w.clone());
             Ok(WindowHandle { window: w })

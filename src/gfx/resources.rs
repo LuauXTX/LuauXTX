@@ -134,11 +134,17 @@ impl Resources {
         limits.max_image_height = Some(8192);
         limits.max_alloc = Some(64 * 1024 * 1024);
         reader.limits(limits);
-        let decoder=reader.into_decoder().map_err(|e| error(format!("cannot decode image {}: {e}",path.display())))?;
-        let(width,height)=image::ImageDecoder::dimensions(&decoder);
-        if width==0 || height==0 || u64::from(width)*u64::from(height)*4>64*1024*1024{return Err(error("image dimensions/decoded size exceed limits"));}
+        let decoder = reader
+            .into_decoder()
+            .map_err(|e| error(format!("cannot decode image {}: {e}", path.display())))?;
+        let (width, height) = image::ImageDecoder::dimensions(&decoder);
+        if width == 0 || height == 0 || u64::from(width) * u64::from(height) * 4 > 64 * 1024 * 1024
+        {
+            return Err(error("image dimensions/decoded size exceed limits"));
+        }
         let image = image::DynamicImage::from_decoder(decoder)
-            .map_err(|e| error(format!("cannot decode image {}: {e}", path.display())))?.to_rgba8();
+            .map_err(|e| error(format!("cannot decode image {}: {e}", path.display())))?
+            .to_rgba8();
         if image.width() == 0 || image.height() == 0 || image.as_raw().len() > 64 * 1024 * 1024 {
             return Err(error("image dimensions/decoded size exceed limits"));
         }

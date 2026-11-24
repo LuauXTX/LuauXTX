@@ -3,6 +3,7 @@ local font = gfx.loadFont(nil, 16)
 local image = gfx.loadImage("pixel.png")
 local backgroundRan = false
 local callbackRan = false
+local callbackFileRan = false
 local frameCount, resizeCount, ordered, presented = 0, 0, 0, 0
 local retainedFrame
 local second
@@ -13,12 +14,15 @@ gfx.run(function()
     assert(not pcall(function() gfx.createWindow({ width=100, height=0/0 }) end))
     local window = gfx.createWindow({ title = "LuauXTX native graphics test", width = 320, height = 240, visible = true, vsync = false })
     second = gfx.createWindow({ title = "Second window", width = 200, height = 120, visible = true, continuous = false })
+    local hidden = gfx.createWindow({ title="Background lifecycle", width=120, height=80, visible=false })
+    task.delay(0.05, function() hidden:close() end)
     second:onFrame(function()
         local frame = second:beginFrame()
         frame:clear(1, 2, 3)
         second:endFrame()
     end)
     window:onEvent(function(event)
+        assert(not pcall(function() window:beginFrame() end), "drawing must happen inside onFrame")
         assert(event.sequence > ordered)
         ordered = event.sequence
         if event.type == "resize" then resizeCount += 1 end
@@ -26,6 +30,12 @@ gfx.run(function()
     window:onFrame(function(dt)
         frameCount += 1
         print("graphics frame", frameCount)
+        if frameCount == 1 then
+            local unbalanced = window:beginFrame()
+            unbalanced:pushTransform({x=1})
+            assert(not pcall(function() window:endFrame() end))
+            assert(not pcall(function() unbalanced:clear(0,0,0) end))
+        end
         assert(dt >= 0 and window:getScaleFactor() > 0)
         if retainedFrame then assert(not pcall(function() retainedFrame:rect({ width = 1, height = 1 }) end)) end
         local frame = window:beginFrame()
@@ -58,6 +68,10 @@ gfx.run(function()
         second:pollEvents()
         if frameCount == 1 then
             task.delay(0.05, function() callbackRan = true end)
+            task.spawn(function()
+                fs.write("callback.tmp", "graphics async I/O"):await()
+                callbackFileRan = fs.read("callback.tmp"):await() == "graphics async I/O"
+            end)
             window:setTitle("Resizing")
             window:setSize(400, 300)
             window:setCursor("pointer")
@@ -69,12 +83,16 @@ gfx.run(function()
         if frameCount >= 12 then
             assert(backgroundRan, "Tokio tasks must progress while gfx.run is active")
             assert(callbackRan, "async work launched by frame callbacks must progress")
+            assert(callbackFileRan, "async filesystem work launched by frame callbacks must progress")
             window:close()
             second:close()
         end
     end)
 end)
 assert(frameCount >= 12 and not second:isOpen())
+assert(not pcall(function() second:onFrame(function() end) end))
+assert(not pcall(function() second:onEvent(function() end) end))
+assert(not pcall(function() second:setCursor("pointer") end))
 assert(presented > 0, "no native surface frame was presented")
 assert(resizeCount > 0, "native resize event was not delivered")
 assert(not pcall(function() retainedFrame:clear(0,0,0) end))

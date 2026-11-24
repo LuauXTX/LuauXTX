@@ -18,18 +18,24 @@ impl Gpu {
     fn descriptor(mut descriptor: wgpu::InstanceDescriptor) -> wgpu::InstanceDescriptor {
         // Initialize the platform backend rather than probing every driver on
         // hybrid-GPU machines. Explicit WGPU_BACKEND can override this choice.
-        descriptor.backends = if cfg!(windows) { wgpu::Backends::DX12 }
-            else if cfg!(target_os="macos") { wgpu::Backends::METAL }
-            else { wgpu::Backends::VULKAN | wgpu::Backends::GL };
+        descriptor.backends = if cfg!(windows) {
+            wgpu::Backends::DX12
+        } else if cfg!(target_os = "macos") {
+            wgpu::Backends::METAL
+        } else {
+            wgpu::Backends::VULKAN | wgpu::Backends::GL
+        };
         descriptor.with_env()
     }
     pub fn new(
         event_loop: &ActiveEventLoop,
         window: Arc<Window>,
     ) -> Result<(Rc<Self>, wgpu::Surface<'static>)> {
-        let instance = wgpu::Instance::new(Self::descriptor(wgpu::InstanceDescriptor::new_with_display_handle(
-            Box::new(event_loop.owned_display_handle()),
-        )));
+        let instance = wgpu::Instance::new(Self::descriptor(
+            wgpu::InstanceDescriptor::new_with_display_handle(Box::new(
+                event_loop.owned_display_handle(),
+            )),
+        ));
         let surface = instance
             .create_surface(window)
             .map_err(|e| error(format!("graphics surface unavailable: {e}")))?;
@@ -40,19 +46,37 @@ impl Gpu {
         instance: wgpu::Instance,
         surface: Option<&wgpu::Surface<'_>>,
     ) -> Result<Self> {
-        let adapter = if let Ok(name)=std::env::var("WGPU_ADAPTER_NAME") {
-            instance.enumerate_adapters(wgpu::Backends::all()).await.into_iter()
-                .find(|a|a.get_info().name.to_lowercase().contains(&name.to_lowercase()) && surface.is_none_or(|s|a.is_surface_supported(s)))
-                .ok_or_else(||error(format!("no graphics adapter matches WGPU_ADAPTER_NAME={name:?}")))?
-        } else { instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                compatible_surface: surface,
-                power_preference: wgpu::PowerPreference::from_env().unwrap_or(wgpu::PowerPreference::HighPerformance),
-                ..Default::default()
-            })
-            .await
-            .map_err(|e| error(format!("no graphics adapter available: {e}")))? };
-        if std::env::var_os("LUAUXTX_GFX_DIAGNOSTICS").is_some(){eprintln!("gfx adapter: {:?}",adapter.get_info());}
+        let adapter = if let Ok(name) = std::env::var("WGPU_ADAPTER_NAME") {
+            instance
+                .enumerate_adapters(wgpu::Backends::all())
+                .await
+                .into_iter()
+                .find(|a| {
+                    a.get_info()
+                        .name
+                        .to_lowercase()
+                        .contains(&name.to_lowercase())
+                        && surface.is_none_or(|s| a.is_surface_supported(s))
+                })
+                .ok_or_else(|| {
+                    error(format!(
+                        "no graphics adapter matches WGPU_ADAPTER_NAME={name:?}"
+                    ))
+                })?
+        } else {
+            instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    compatible_surface: surface,
+                    power_preference: wgpu::PowerPreference::from_env()
+                        .unwrap_or(wgpu::PowerPreference::HighPerformance),
+                    ..Default::default()
+                })
+                .await
+                .map_err(|e| error(format!("no graphics adapter available: {e}")))?
+        };
+        if std::env::var_os("LUAUXTX_GFX_DIAGNOSTICS").is_some() {
+            eprintln!("gfx adapter: {:?}", adapter.get_info());
+        }
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("LuauXTX gfx"),
@@ -259,7 +283,7 @@ impl Painter {
         self.gpu.check()?;
         self.textures.retain(|_, v| v.source.strong_count() > 0);
         let mut bytes = Vec::new();
-        let mut draws = Vec::new();
+        let mut draws: Vec<(std::ops::Range<u32>, u64)> = Vec::new();
         let mut count = 0u32;
         for draw in frame.draws {
             let texture = draw.texture.as_ref().unwrap_or(&self.white).clone();
@@ -297,7 +321,11 @@ impl Painter {
                     }
                 }
             }
-            draws.push((start..count, texture.id));
+            if let Some((range, _)) = draws.last_mut().filter(|(_, id)| *id == texture.id) {
+                range.end = count;
+            } else {
+                draws.push((start..count, texture.id));
+            }
         }
         if bytes.len() as u64 > self.capacity {
             self.capacity = (bytes.len() as u64).next_power_of_two();
@@ -412,7 +440,7 @@ impl Renderer {
         self.surface.configure(&self.gpu.device, &self.config);
         self.gpu.check()
     }
-    pub fn draw(&mut self, frame: DrawFrame) -> Result<bool> {
+    pub fn draw(&mut self, mut frame: DrawFrame) -> Result<bool> {
         let size = self.window.inner_size();
         if size.width == 0 || size.height == 0 {
             return Ok(false);
@@ -420,6 +448,10 @@ impl Renderer {
         if self.config.width != size.width || self.config.height != size.height {
             self.resize()?;
         }
+        // A native size request can take effect before its resize event. Keep
+        // logical coordinates stable even if that happens during a frame.
+        let logical = size.to_logical::<f32>(self.window.scale_factor());
+        frame.size = [logical.width, logical.height];
         let surface_frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f) => f,
             wgpu::CurrentSurfaceTexture::Suboptimal(f) => {
@@ -467,9 +499,18 @@ mod tests {
     #[test]
     fn gpu_pixels_preserve_order_alpha_rounding_clips_and_textures() {
         eprintln!("Initializing GPU readback fixture");
-        let gpu = match pollster::block_on(Gpu::from_instance(wgpu::Instance::new(Gpu::descriptor(wgpu::InstanceDescriptor::new_without_display_handle())), None)) {
+        let gpu = match pollster::block_on(Gpu::from_instance(
+            wgpu::Instance::new(Gpu::descriptor(
+                wgpu::InstanceDescriptor::new_without_display_handle(),
+            )),
+            None,
+        )) {
             Ok(g) => Rc::new(g),
             Err(e) => {
+                assert!(
+                    std::env::var_os("LUAUXTX_REQUIRE_GPU").is_none(),
+                    "GPU was required: {e}"
+                );
                 eprintln!("GPU readback test unavailable: {e}");
                 return;
             }
@@ -494,6 +535,16 @@ mod tests {
             .add(150., 0., 70., 70., [1.; 4], 0., 0., None)
             .unwrap();
         frame.clips.pop();
+        frame
+            .add(90., 75., 60., 45., [0., 1., 0., 1.], 10., 3., None)
+            .unwrap();
+        frame
+            .transforms
+            .push(Transform([0., 1., -1., 0., 240., 80.]));
+        frame
+            .add(0., 0., 30., 10., [0., 1., 1., 1.], 0., 0., None)
+            .unwrap();
+        frame.transforms.pop();
         let pixels = Rc::new(Pixels::new(1, 1, vec![255, 255, 0, 255]));
         frame
             .add(220., 10., 20., 20., [1.; 4], 0., 0., Some(pixels))
@@ -591,6 +642,9 @@ mod tests {
         assert_eq!(pixel(180, 20), vec![255; 4]);
         assert_eq!(pixel(160, 45), vec![0, 0, 0, 255]);
         assert_eq!(pixel(225, 15), vec![255, 255, 0, 255]);
+        assert_eq!(pixel(120, 98), vec![0, 0, 0, 255]);
+        assert_eq!(pixel(120, 76), vec![0, 255, 0, 255]);
+        assert_eq!(pixel(235, 95), vec![0, 255, 255, 255]);
         assert!(
             (90..120).any(|y| (5..65).any(|x| pixel(x, y)[0] > 100)),
             "text raster is empty"
@@ -601,5 +655,16 @@ mod tests {
         drop(bytes);
         output.unmap();
         gpu.check().unwrap();
+        drop(font);
+        gpu.queue.submit(Some(
+            painter
+                .paint(&view, DrawFrame::new([256., 128.], 0.))
+                .unwrap(),
+        ));
+        assert_eq!(
+            painter.textures.len(),
+            1,
+            "expired image/text GPU resources should be reclaimed; retain only white texture"
+        );
     }
 }

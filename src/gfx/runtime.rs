@@ -234,7 +234,13 @@ impl App<'_> {
         match event{
             WindowEvent::RedrawRequested=>{
                 let(callback,dt)={let w=window.borrow();(w.on_frame.clone(),w.last_frame.elapsed().as_secs_f32())};
-                if let Some(callback)=callback{self.call(&callback,dt)?;if window.borrow().frame.is_some(){return Err(error("onFrame returned with an unfinished frame; call window:endFrame()"));}}
+                if let Some(callback)=callback{
+                    window.borrow_mut().in_redraw=true;
+                    let result=self.call(&callback,dt);
+                    window.borrow_mut().in_redraw=false;
+                    result?;
+                    if window.borrow().frame.is_some(){return Err(error("onFrame returned with an unfinished frame; call window:endFrame()"));}
+                }
             }
             WindowEvent::CloseRequested=>{self.event(&window,json!({"type":"close"}))?;if window.borrow().options.close_on_request{window.borrow_mut().open=false;}}
             WindowEvent::Resized(size)=>{
@@ -260,6 +266,10 @@ impl App<'_> {
             }
             WindowEvent::Ime(ime)=>{let event=match ime{Ime::Enabled=>json!({"type":"imeEnabled"}),Ime::Disabled=>json!({"type":"imeDisabled"}),Ime::Preedit(text,cursor)=>json!({"type":"imeComposition","text":text,"cursorStart":cursor.map(|p|p.0),"cursorEnd":cursor.map(|p|p.1)}),Ime::Commit(text)=>json!({"type":"textInput","text":text,"ime":true})};self.event(&window,event)?;}
             WindowEvent::Destroyed=>window.borrow_mut().open=false,
+            WindowEvent::Occluded(occluded)=>{
+                let mut w=window.borrow_mut();w.occluded=occluded;
+                if !occluded{w.next_frame=Instant::now();if let Some(n)=&w.native{n.request_redraw();}}
+            }
             _=>{}
         }
         Ok(())
@@ -307,7 +317,12 @@ impl ApplicationHandler<()> for App<'_> {
         let mut deadline = None;
         for w in self.state.windows.borrow().iter() {
             let mut w = w.borrow_mut();
-            if w.open && w.options.continuous && w.on_frame.is_some() {
+            if w.open
+                && w.options.visible
+                && !w.occluded
+                && w.options.continuous
+                && w.on_frame.is_some()
+            {
                 if let Some(n) = w.native.clone() {
                     let size = n.inner_size();
                     if size.width == 0 || size.height == 0 {

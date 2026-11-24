@@ -23,9 +23,13 @@ fn run(name: &str) {
         }
         if start.elapsed().as_secs() > 30 {
             child.kill().unwrap();
-            let output=child.wait_with_output().unwrap();
+            let output = child.wait_with_output().unwrap();
             fs::remove_dir_all(&root).unwrap();
-            panic!("graphics CLI timed out\nstdout: {}\nstderr: {}",String::from_utf8_lossy(&output.stdout),String::from_utf8_lossy(&output.stderr));
+            panic!(
+                "graphics CLI timed out\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
@@ -50,4 +54,9 @@ fn desktop_startup_errors_are_catchable() {
 #[ignore = "requires an interactive desktop or Xvfb and a GPU/software adapter"]
 fn native_windows_resize_frames_and_cleanup() {
     run("live.luau");
+}
+#[test]
+#[ignore = "requires an interactive desktop or Xvfb and a GPU/software adapter"]
+fn callback_failure_closes_native_resources() {
+    run("failure.luau");
 }
